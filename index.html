@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GOLD ANALYZER v0.5.1 — XAUUSD [Auto-Start Live]</title>
+<title>GOLD ANALYZER v0.5.2 — XAUUSD [SMART AUTO Regime-Aware]</title>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;900&family=Archivo+Narrow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -333,6 +333,17 @@ select.ctrl-input{cursor:pointer;width:auto}
 .strat-chip:hover{color:var(--txt);border-color:var(--border2)}
 .strat-chip.on{background:var(--gold);color:#1a1408;border-color:var(--gold);box-shadow:0 4px 12px rgba(212,163,86,.2)}
 .strat-chip .strat-emoji{font-size:13px}
+/* 🤖 v0.5.2: SMART AUTO chip — pulsing accent when active */
+.strat-chip.smart-auto{border-color:#5ac8fa;background:linear-gradient(135deg,rgba(90,200,250,.10),rgba(90,200,250,.02));color:#7ed4ff;font-weight:700}
+.strat-chip.smart-auto:not(.on):hover{color:#bfe7ff;border-color:#7ed4ff}
+.strat-chip.smart-auto.on{background:linear-gradient(135deg,#5ac8fa,#3a9ed8);color:#06151e;border-color:#5ac8fa;box-shadow:0 0 16px rgba(90,200,250,.45)}
+.strat-chip.smart-auto.on::before{content:'';position:absolute;inset:-2px;border-radius:10px;background:linear-gradient(135deg,#5ac8fa,#5ac8fa00);opacity:.4;animation:smartPulse 2.2s ease-in-out infinite;z-index:-1}
+.strat-chip.smart-auto{position:relative;z-index:0}
+@keyframes smartPulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:.6;transform:scale(1.04)}}
+/* v0.5.2: regime hint bar (below chips) */
+.regime-hint{margin-top:10px;padding:8px 12px;background:rgba(90,200,250,.06);border:1px solid rgba(90,200,250,.25);border-radius:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.reg-hint-lbl{font-size:9px;font-weight:700;letter-spacing:1.5px;color:#5ac8fa;font-family:'JetBrains Mono',monospace;flex-shrink:0;padding:2px 6px;background:rgba(90,200,250,.15);border-radius:3px}
+.reg-hint-txt{font-size:11px;color:var(--txt);font-family:'JetBrains Mono',monospace;line-height:1.5}
 /* 🏆 Optimized winner styling */
 .strat-chip.optimized{border-color:var(--gold);position:relative}
 .strat-chip.optimized:not(.on){background:linear-gradient(135deg,rgba(212,163,86,.08),rgba(212,163,86,.02));color:var(--gold)}
@@ -541,11 +552,15 @@ select.ctrl-input{cursor:pointer;width:auto}
   <!-- STRATEGY SELECTOR BAR -->
   <div class="strat-bar">
     <div class="strat-bar-hdr">
-      <span class="strat-bar-title">⚡ STRATEGY ENGINE — เลือกกลยุทธ์เทรด</span>
-      <span class="strat-current" id="stratCurrent">AUTO · เลือก strategy ที่ confidence สูงสุด</span>
+      <span class="strat-bar-title">⚡ STRATEGY ENGINE — SMART AUTO เลือกเองตามสภาพตลาด</span>
+      <span class="strat-current" id="stratCurrent">🤖 SMART AUTO · กำลังวิเคราะห์ตลาด...</span>
     </div>
     <div class="strat-chips" id="stratChips">
       <!-- populated by JS -->
+    </div>
+    <div class="regime-hint" id="regimeHint" style="display:none">
+      <span class="reg-hint-lbl">REGIME LOGIC</span>
+      <span class="reg-hint-txt">—</span>
     </div>
   </div>
 
@@ -744,6 +759,12 @@ select.ctrl-input{cursor:pointer;width:auto}
   <div class="tip" style="margin-top:18px">
     <b>📚 STRATEGY LIBRARY:</b> 5 กลยุทธ์เทรดทองที่ออกแบบมาเฉพาะ XAUUSD แต่ละกลยุทธ์มี logic + ENTRY/TP/SL ของตัวเอง
     · กล่องที่ <b style="color:var(--gold)">มี glow ทอง</b> = strategy นั้นมี signal ในขณะนี้
+    <br><b style="color:#5ac8fa">🤖 SMART AUTO mapping:</b> 
+    📈 Trending → <b>Trend Pullback</b> · 
+    🔄 Ranging → <b>Mean Reversion</b> · 
+    💥 BB Squeeze → <b>Breakout</b> · 
+    🎣 Liquidity Hunt → <b>Liquidity Sweep</b> · 
+    ⚡ Mixed → <b>VWAP Bounce</b>
     · ไปที่แท็บ <b>BACKTEST</b> เพื่อทดสอบย้อนหลัง 200 bars (~16 ชม.)
   </div>
 
@@ -1150,7 +1171,7 @@ select.ctrl-input{cursor:pointer;width:auto}
 let liveTimer=null, refreshCountdown=30, rfTickTimer=null;
 let currentTF='5'; // TradingView TF
 let direction='both'; // both | long | short
-let currentStrategy='vwap_bounce'; // 🏆 OPTIMIZED — default to backtest winner (v0.3.0)
+let currentStrategy='auto'; // v0.5.2 — default to SMART AUTO (regime-aware) so it switches by market
 let tvWidget=null, tvTechWidget=null;
 const klBuf=[]; // klines buffer for 5m
 const klBuf15=[]; // v0.4.0: 15m buffer for MTF confirm
@@ -2044,13 +2065,115 @@ function buildSnap(klines, sessW=1.0){
   };
 }
 
+// ════════════════════════════════════════════════════════
+// v0.5.2: MARKET REGIME DETECTOR — picks best strategy automatically
+// ════════════════════════════════════════════════════════
+// Analyzes the snapshot and classifies the market into one of:
+//   strong_trend  → trend_pullback     (📈 directional, MACD/EMA aligned)
+//   squeeze       → breakout           (💥 BB compression + vol spike)
+//   liquidity     → liquidity_sweep    (🎣 swing taken out then reversed)
+//   range         → mean_reversion     (🔄 low trend, RSI mid, quiet ATR)
+//   mixed         → vwap_bounce        (⚡ general purpose default)
+//
+// Returns: { regime, label, emoji, preferred, secondPreferred, why, trendStrength, volPct, bbWidthPct }
+function detectMarketRegime(snap){
+  const s = snap;
+  const price = s.price;
+  // Trend strength: EMA spread normalized by ATR (ADX-ish)
+  const emaSpread = Math.abs(s.ema9 - s.ema21);
+  const trendStrength = s.atr>0 ? emaSpread / s.atr : 0; // <0.3 weak, >0.8 strong
+  // Volatility as % of price
+  const volPct = s.atr>0 ? (s.atr / price * 100) : 0;     // <0.15 dead, >0.35 hot
+  // BB width as % of mid
+  const bbWidthPct = s.bb.mid>0 ? ((s.bb.up - s.bb.lo) / s.bb.mid * 100) : 0; // <0.5 squeeze
+  // Volume spike
+  const volSpike = s.volRatio >= 1.8;
+  const volStrong = s.volRatio >= 1.4;
+
+  // Liquidity hunt detection: recent swing broken intrabar but closed back
+  let swingHunt = null;
+  if(s.swings && s.swings.length>=2){
+    // last swing high & last swing low
+    let recentH=null, recentL=null;
+    for(let i=s.swings.length-1;i>=0;i--){
+      if(!recentH && s.swings[i].type==='H')recentH=s.swings[i];
+      if(!recentL && s.swings[i].type==='L')recentL=s.swings[i];
+      if(recentH && recentL)break;
+    }
+    const k = s.lastK;
+    if(recentH && k.h > recentH.price && k.c < recentH.price && s.upperWickPct>0.35){
+      swingHunt = 'high_swept';
+    } else if(recentL && k.l < recentL.price && k.c > recentL.price && s.lowerWickPct>0.35){
+      swingHunt = 'low_swept';
+    }
+  }
+
+  // Classify (priority order)
+  let regime, emoji, label, preferred, secondPreferred, why;
+
+  if(swingHunt && volStrong){
+    regime = 'liquidity';
+    emoji = '🎣';
+    label = swingHunt==='high_swept' ? 'LIQUIDITY HUNT (high swept)' : 'LIQUIDITY HUNT (low swept)';
+    preferred = 'liquidity_sweep';
+    secondPreferred = 'mean_reversion';
+    why = `Swing ${swingHunt==='high_swept'?'high':'low'} broken แล้ว reverse · wick ${swingHunt==='high_swept'?(s.upperWickPct*100).toFixed(0):(s.lowerWickPct*100).toFixed(0)}% · vol ${s.volRatio.toFixed(1)}×`;
+  }
+  else if(bbWidthPct < 0.55 && volSpike){
+    regime = 'squeeze';
+    emoji = '💥';
+    label = 'SQUEEZE BREAKOUT';
+    preferred = 'breakout';
+    secondPreferred = 'vwap_bounce';
+    why = `BB width ${bbWidthPct.toFixed(2)}% (tight) + vol spike ${s.volRatio.toFixed(1)}× → ตลาดจ่อระเบิด`;
+  }
+  else if(trendStrength > 0.75 && volPct > 0.15){
+    regime = 'strong_trend';
+    emoji = s.emaBull ? '📈' : '📉';
+    label = s.emaBull ? 'STRONG TREND ↑' : 'STRONG TREND ↓';
+    preferred = 'trend_pullback';
+    secondPreferred = 'vwap_bounce';
+    why = `EMA spread/ATR = ${trendStrength.toFixed(2)} (>0.75) · ATR ${volPct.toFixed(2)}% · MACD ${s.macdBull?'bull':'bear'}`;
+  }
+  else if(trendStrength < 0.35 && volPct < 0.28 && s.rsi>35 && s.rsi<65){
+    regime = 'range';
+    emoji = '🔄';
+    label = 'RANGING / QUIET';
+    preferred = 'mean_reversion';
+    secondPreferred = 'vwap_bounce';
+    why = `Trend อ่อน (${trendStrength.toFixed(2)}) · ATR ${volPct.toFixed(2)}% · RSI ${s.rsi.toFixed(0)} กลาง → กิน range`;
+  }
+  else if(volPct > 0.4 && trendStrength < 0.6){
+    regime = 'choppy';
+    emoji = '⚠️';
+    label = 'CHOPPY (high vol, no trend)';
+    preferred = 'vwap_bounce';
+    secondPreferred = 'liquidity_sweep';
+    why = `ATR ${volPct.toFixed(2)}% สูง แต่ trend ${trendStrength.toFixed(2)} อ่อน → เสี่ยง whipsaw, ใช้ VWAP เป็น anchor`;
+  }
+  else {
+    regime = 'mixed';
+    emoji = '⚡';
+    label = 'MIXED';
+    preferred = 'vwap_bounce';
+    secondPreferred = 'trend_pullback';
+    why = `ไม่มีสภาพตลาดเด่นชัด · trend ${trendStrength.toFixed(2)} · ATR ${volPct.toFixed(2)}% · VWAP เป็น default ที่เหมาะที่สุด`;
+  }
+
+  return { regime, label, emoji, preferred, secondPreferred, why, trendStrength, volPct, bbWidthPct };
+}
+
 // Run all strategies + pick best by confidence (respect direction filter)
+// v0.5.2: AUTO mode is now REGIME-AWARE — applies a fit bonus to the strategy
+// that matches the detected market regime, so it switches itself by market type.
 function runStrategies(snap, dirFilter='both', stratFilter='auto'){
   const out = {};
   Object.keys(STRATEGIES).forEach(k=>{
     const result = STRATEGIES[k].fn(snap);
     out[k] = result;
   });
+  // Always compute regime so the UI can show it (even when user picked manual)
+  const regime = detectMarketRegime(snap);
   // Pick the chosen one
   let chosen=null, chosenKey=null;
   if(stratFilter && stratFilter!=='auto'){
@@ -2061,18 +2184,24 @@ function runStrategies(snap, dirFilter='both', stratFilter='auto'){
       chosen = {...chosen, valid:false, msg:'filtered by direction ('+dirFilter+')'};
     }
   } else {
-    // AUTO — pick the highest confidence valid signal
-    let best=null, bestKey=null;
+    // AUTO — regime-aware: prefer strategy that matches market regime,
+    // with confidence as the actual score and regime-fit as a bonus.
+    let best=null, bestKey=null, bestScore=-1;
     Object.keys(out).forEach(k=>{
       const r=out[k];
       if(!r.valid)return;
       if(dirFilter!=='both' && r.signal!==dirFilter)return;
-      if(!best || r.confidence>best.confidence){best=r; bestKey=k;}
+      // Regime fit bonus: matched strategy +25, second-preferred +10
+      let fitBonus = 0;
+      if(k === regime.preferred)        fitBonus = 25;
+      else if(k === regime.secondPreferred) fitBonus = 10;
+      const eff = r.confidence + fitBonus;
+      if(eff > bestScore){ best = r; bestKey = k; bestScore = eff; }
     });
     chosen = best;
     chosenKey = bestKey;
   }
-  return {all: out, chosen, chosenKey};
+  return {all: out, chosen, chosenKey, regime};
 }
 
 // ════════════════════════════════════════════════════════
@@ -2560,6 +2689,7 @@ async function _doAnalyze(){
     session:si, ts:Date.now(),
     // strategy
     stratUsed, stratResults: stratRes.all, reasons, confidence,
+    regime: stratRes.regime, // v0.5.2: market regime detection (for SMART AUTO display)
     // v0.4.0
     mtf, mtfBlocked, mtfPenalty, newsBlocked, newsEvent:news.event, dataSrc:currentDataSrc,
     // v0.5.0
@@ -2765,19 +2895,44 @@ function renderResult(r){
   rgEl.textContent=r.grade==='A'?'A · EXCELLENT':r.grade==='B'?'B · GOOD':r.grade==='C'?'C · CAUTION':'D · AVOID';
   rgEl.className='card-tag '+(r.grade==='A'?'long':r.grade==='B'?'long':r.grade==='C'?'wait':'short');
 
-  // Strategy current label
+  // Strategy current label — v0.5.2: shows regime + chosen strategy when AUTO
   const stratLbl = document.getElementById('stratCurrent');
+  const isAuto = currentStrategy==='auto';
+  const regInfo = r.regime;
   if(r.stratUsed){
     const def = STRATEGIES[r.stratUsed];
-    stratLbl.textContent = `${def.emoji} ${def.name.toUpperCase()} · ${r.direction.toUpperCase()} SIGNAL · ${r.confidence}% conf`;
+    if(isAuto && regInfo){
+      const matchTag = (r.stratUsed===regInfo.preferred) ? '✓ regime match'
+                     : (r.stratUsed===regInfo.secondPreferred) ? '~ regime fit'
+                     : '(by confidence)';
+      stratLbl.innerHTML = `<span style="color:var(--sub)">🤖 SMART AUTO ·</span> <span style="color:var(--gold)">${regInfo.emoji} ${regInfo.label}</span> <span style="color:var(--sub)">→</span> ${def.emoji} <b>${def.name.toUpperCase()}</b> · ${r.direction.toUpperCase()} · ${r.confidence}% <span style="color:var(--sub);font-size:10px">${matchTag}</span>`;
+    } else {
+      stratLbl.textContent = `${def.emoji} ${def.name.toUpperCase()} · ${r.direction.toUpperCase()} SIGNAL · ${r.confidence}% conf`;
+    }
     stratLbl.style.color = 'var(--gold)';
-  } else if(currentStrategy==='auto') {
-    stratLbl.textContent = 'AUTO · ยังไม่มี strategy ที่ valid';
+  } else if(isAuto) {
+    if(regInfo){
+      const def = STRATEGIES[regInfo.preferred];
+      stratLbl.innerHTML = `<span style="color:var(--sub)">🤖 SMART AUTO ·</span> <span style="color:var(--gold)">${regInfo.emoji} ${regInfo.label}</span> <span style="color:var(--sub)">→ รอ signal จาก</span> ${def.emoji} <b>${def.name}</b>`;
+    } else {
+      stratLbl.textContent = '🤖 SMART AUTO · กำลังวิเคราะห์ตลาด...';
+    }
     stratLbl.style.color = 'var(--sub)';
   } else {
     const def = STRATEGIES[currentStrategy];
-    stratLbl.textContent = `${def.emoji} ${def.name.toUpperCase()} · ไม่ตรงเงื่อนไข`;
+    stratLbl.textContent = `${def.emoji} ${def.name.toUpperCase()} · ไม่ตรงเงื่อนไข${regInfo?' · ตลาดตอนนี้: '+regInfo.label:''}`;
     stratLbl.style.color = 'var(--sub)';
+  }
+
+  // v0.5.2: regime hint bar (shows "why" for SMART AUTO)
+  let regimeHintEl = document.getElementById('regimeHint');
+  if(regimeHintEl && regInfo){
+    if(isAuto){
+      regimeHintEl.style.display = 'flex';
+      regimeHintEl.innerHTML = `<span class="reg-hint-lbl">REGIME LOGIC</span><span class="reg-hint-txt">${regInfo.why}</span>`;
+    } else {
+      regimeHintEl.style.display = 'none';
+    }
   }
 
   // Confidence bar + reasons
@@ -2807,24 +2962,39 @@ function renderResult(r){
 function renderStrategyChips(){
   const chipsEl = document.getElementById('stratChips');
   const items = [
-    {key:'auto', emoji:'🎯', name:'AUTO'},
+    {key:'auto', emoji:'🤖', name:'SMART AUTO', smart:true},
     {key:'mean_reversion', emoji:'🔄', name:'Mean Reversion'},
     {key:'trend_pullback', emoji:'📈', name:'Trend Pullback'},
     {key:'breakout', emoji:'💥', name:'Breakout'},
     {key:'liquidity_sweep', emoji:'🎣', name:'Liquidity Sweep'},
     {key:'vwap_bounce', emoji:'⚡', name:'VWAP Bounce', badge:'🏆'},
   ];
-  chipsEl.innerHTML = items.map(it=>
-    `<button class="strat-chip ${currentStrategy===it.key?'on':''} ${it.badge?'optimized':''}" onclick="setStrategy('${it.key}')" ${it.badge?'title="🏆 Backtest Winner — Optimized v0.3.0"':''}>
+  chipsEl.innerHTML = items.map(it=>{
+    const cls = [
+      'strat-chip',
+      currentStrategy===it.key?'on':'',
+      it.badge?'optimized':'',
+      it.smart?'smart-auto':''
+    ].filter(Boolean).join(' ');
+    const title = it.smart ? 'title="🤖 SMART AUTO — ตรวจสภาพตลาดอัตโนมัติ (trending/ranging/squeeze/liquidity) แล้วเลือก strategy ที่เหมาะที่สุดให้เอง"'
+                : it.badge ? 'title="🏆 Backtest Winner — Optimized v0.3.0"' : '';
+    return `<button class="${cls}" onclick="setStrategy('${it.key}')" ${title}>
       <span class="strat-emoji">${it.emoji}</span>${it.name}${it.badge?'<span class="opt-badge">'+it.badge+'</span>':''}
-    </button>`
-  ).join('');
+    </button>`;
+  }).join('');
 }
 
 function setStrategy(key){
   currentStrategy = key;
   renderStrategyChips();
-  log(`Strategy → <b>${key==='auto'?'AUTO':STRATEGIES[key].emoji+' '+STRATEGIES[key].name}</b>`,'wn');
+  const label = key==='auto' ? '🤖 SMART AUTO <span class="sub">(regime-aware — เปลี่ยนเองตามสภาพตลาด)</span>'
+              : STRATEGIES[key].emoji+' '+STRATEGIES[key].name;
+  log(`Strategy → <b>${label}</b>`,'wn');
+  // Hide regime hint when switching off AUTO
+  if(key !== 'auto'){
+    const rh = document.getElementById('regimeHint');
+    if(rh) rh.style.display = 'none';
+  }
   if(klBuf.length>30) analyzeNow();
 }
 
